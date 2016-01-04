@@ -29,7 +29,7 @@ static intrusive_ptr< context > make_dispatcher_context( scheduler * sched) {
     BOOST_ASSERT( nullptr != sched);
     default_stack salloc; // use default satck-size
     boost::context::stack_context sctx = salloc.allocate();
-#if defined(BOOST_NO_CXX14_CONSTEXPR) || defined(BOOST_NO_CXX11_STD_ALIGN)
+#if defined(BOOST_NO_CXX11_CONSTEXPR) || defined(BOOST_NO_CXX11_STD_ALIGN)
     // reserve space for control structure
     const std::size_t size = sctx.size - sizeof( context);
     void * sp = static_cast< char * >( sctx.sp) - sizeof( context);
@@ -60,7 +60,7 @@ thread_local static std::size_t counter;
 // schwarz counter
 context_initializer::context_initializer() {
     if ( 0 == counter++) {
-# if defined(BOOST_NO_CXX14_CONSTEXPR) || defined(BOOST_NO_CXX11_STD_ALIGN)
+# if defined(BOOST_NO_CXX11_CONSTEXPR) || defined(BOOST_NO_CXX11_STD_ALIGN)
         // allocate memory for main context and scheduler
         constexpr std::size_t size = sizeof( context) + sizeof( scheduler);
         void * vp = std::malloc( size);
@@ -122,7 +122,7 @@ context_initializer::~context_initializer() {
         scheduler * sched = main_ctx->get_scheduler();
         sched->~scheduler();
         main_ctx->~context();
-# if defined(BOOST_NO_CXX14_CONSTEXPR) || defined(BOOST_NO_CXX11_STD_ALIGN)
+# if defined(BOOST_NO_CXX11_CONSTEXPR) || defined(BOOST_NO_CXX11_STD_ALIGN)
         std::free( main_ctx);
 # else
         int * shift = reinterpret_cast< int * >( reinterpret_cast< char * >( main_ctx) - sizeof( int) );
@@ -132,10 +132,22 @@ context_initializer::~context_initializer() {
     }
 }
 
+void
+context::destroy_( context * ctx) noexcept {
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    boost::context::captured_context cc( std::move( ctx->ctx_) );
+#else
+    boost::context::execution_context ec( ctx->ctx_);
+#endif
+    ctx->~context();
+}
+
 context *
 context::active() noexcept {
+#if defined(BOOST_USE_EXECUTION_CONTEXT)
     // initialized the first time control passes; per thread
     thread_local static boost::context::detail::activation_record_initializer rec_initializer;
+#endif
     // initialized the first time control passes; per thread
     thread_local static context_initializer ctx_initializer;
     return active_;
@@ -146,6 +158,19 @@ context::reset_active() noexcept {
     active_ = nullptr;
 }
 
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+void
+context::resume_( data_t & d) {
+    auto result = ctx_( & d);
+    data_t * dp( static_cast< data_t * >( std::get< 1 >( result) ) );
+    dp->from->ctx_ = std::move( std::get< 0 >( result) );
+    if ( nullptr != dp->lk) {
+        dp->lk->unlock();
+    } else if ( nullptr != dp->ctx) {
+        active_->set_ready_( dp->ctx);
+    }
+}
+#else
 void
 context::resume_( data_t & d) noexcept {
     data_t * dp = static_cast< data_t * >( ctx_( & d) );
@@ -155,6 +180,7 @@ context::resume_( data_t & d) noexcept {
         active_->set_ready_( dp->ctx);
     }
 }
+#endif
 
 void
 context::set_ready_( context * ctx) noexcept {
@@ -165,15 +191,37 @@ context::set_ready_( context * ctx) noexcept {
 context::context( main_context_t) noexcept :
     use_count_{ 1 }, // allocated on main- or thread-stack
     flags_{ flag_main_context },
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    ctx_() {
+#else
     ctx_{ boost::context::execution_context::current() } {
+#endif
 }
 
 // dispatcher fiber context
 context::context( dispatcher_context_t, boost::context::preallocated const& palloc,
                   default_stack const& salloc, scheduler * sched) :
     flags_{ flag_dispatcher_context },
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
     ctx_{ std::allocator_arg, palloc, salloc,
-          [this,sched] (void * vp) noexcept {
+          [this,sched]( boost::context::captured_context ctx, void * vp) {
+            data_t * dp = static_cast< data_t * >( vp);
+            // update captured_context of calling fiber
+            dp->from->ctx_ = std::move( ctx);
+            if ( nullptr != dp->lk) {
+                dp->lk->unlock();
+            } else if ( nullptr != dp->ctx) {
+                active_->set_ready_( dp->ctx);
+            }
+            // execute scheduler::dispatch()
+            sched->dispatch();
+            // dispatcher context should never return from scheduler::dispatch()
+            BOOST_ASSERT_MSG( false, "disatcher fiber already terminated");
+            return std::move( ctx);
+          }}
+#else
+    ctx_{ std::allocator_arg, palloc, salloc,
+          [this,sched]( void * vp) noexcept {
             data_t * dp = static_cast< data_t * >( vp);
             if ( nullptr != dp->lk) {
                 dp->lk->unlock();
@@ -184,8 +232,9 @@ context::context( dispatcher_context_t, boost::context::preallocated const& pall
             sched->dispatch();
             // dispatcher context should never return from scheduler::dispatch()
             BOOST_ASSERT_MSG( false, "disatcher fiber already terminated");
-          }} {
-}
+          }}
+#endif
+{}
 
 context::~context() {
     BOOST_ASSERT( wait_queue_.empty() );
@@ -206,32 +255,56 @@ context::get_id() const noexcept {
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+context::resume() {
+#else
 context::resume() noexcept {
+#endif
     context * prev = this;
     // active_ will point to `this`
     // prev will point to previous active context
     std::swap( active_, prev);
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    data_t d{ prev };
+#else
     data_t d{};
+#endif
     resume_( d);
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+context::resume( detail::spinlock_lock & lk) {
+#else
 context::resume( detail::spinlock_lock & lk) noexcept {
+#endif
     context * prev = this;
     // active_ will point to `this`
     // prev will point to previous active context
     std::swap( active_, prev);
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    data_t d{ & lk, prev };
+#else
     data_t d{ & lk };
+#endif
     resume_( d);
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+context::resume( context * ready_ctx) {
+#else
 context::resume( context * ready_ctx) noexcept {
+#endif
     context * prev = this;
     // active_ will point to `this`
     // prev will point to previous active context
     std::swap( active_, prev);
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    data_t d{ ready_ctx, prev };
+#else
     data_t d{ ready_ctx };
+#endif
     resume_( d);
 }
 
@@ -280,7 +353,11 @@ context::yield() noexcept {
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+context::terminate() {
+#else
 context::terminate() noexcept {
+#endif
     // protect for concurrent access
     std::unique_lock< detail::spinlock > lk( splk_);
     // mark as terminated

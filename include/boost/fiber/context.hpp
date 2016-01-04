@@ -18,7 +18,11 @@
 #include <boost/assert.hpp>
 #include <boost/config.hpp>
 #include <boost/context/detail/apply.hpp>
-#include <boost/context/execution_context.hpp>
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+# include <boost/context/captured_context.hpp>
+#else
+# include <boost/context/execution_context.hpp>
+#endif
 #include <boost/context/stack_context.hpp>
 #include <boost/intrusive/list.hpp>
 #include <boost/intrusive/parent_from_member.hpp>
@@ -157,6 +161,29 @@ private:
         }
     };
 
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    struct data_t {
+        detail::spinlock_lock   *   lk{ nullptr };
+        context                 *   ctx{ nullptr };
+        context                 *   from;
+
+        explicit data_t( context * from_) noexcept :
+            from{ from_ } {
+        }
+
+        explicit data_t( detail::spinlock_lock * lk_,
+                         context * from_) noexcept :
+            lk{ lk_ },
+            from{ from_ } {
+        }
+
+        explicit data_t( context * ctx_,
+                         context * from_) noexcept :
+            ctx{ ctx_ },
+            from{ from_ } {
+        }
+    };
+#else
     struct data_t {
         detail::spinlock_lock   *   lk{ nullptr };
         context                 *   ctx{ nullptr };
@@ -171,6 +198,7 @@ private:
             ctx{ ctx_ } {
         }
     };
+#endif
 
     typedef std::map< uintptr_t, fss_data >     fss_data_t;
 
@@ -184,11 +212,46 @@ private:
     int                                     flags_;
 #endif
     scheduler                           *   scheduler_{ nullptr };
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    boost::context::captured_context        ctx_;
+#else
     boost::context::execution_context       ctx_;
+#endif
 
+    static void destroy_( context*) noexcept;
+
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    void resume_( data_t &);
+#else
     void resume_( data_t &) noexcept;
+#endif
     void set_ready_( context *) noexcept;
 
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    template< typename Fn, typename Tpl >
+    boost::context::captured_context
+    run_( boost::context::captured_context ctx, Fn && fn_, Tpl && tpl_, data_t * dp) {
+        try {
+            typename std::decay< Fn >::type fn = std::forward< Fn >( fn_);
+            typename std::decay< Tpl >::type tpl = std::forward< Tpl >( tpl_);
+            // update captured_context of calling fiber
+            dp->from->ctx_ = std::move( ctx);
+            if ( nullptr != dp->lk) {
+                dp->lk->unlock();
+            } else if ( nullptr != dp->ctx) {
+                active_->set_ready_( dp->ctx);
+            }
+            boost::context::detail::apply( fn, tpl);
+        } catch ( fiber_interrupted const&) {
+        } catch ( boost::context::detail::forced_unwind const&) {
+            throw;
+        }
+        // terminate context
+        terminate();
+        BOOST_ASSERT_MSG( false, "fiber already terminated");
+        return std::move( ctx);
+    }
+#else
     template< typename Fn, typename Tpl >
     void run_( Fn && fn_, Tpl && tpl_, data_t * dp) noexcept {
         try {
@@ -206,6 +269,7 @@ private:
         terminate();
         BOOST_ASSERT_MSG( false, "fiber already terminated");
     }
+#endif
 
 public:
     detail::ready_hook                      ready_hook_{};
@@ -303,7 +367,26 @@ public:
              Fn && fn, Tpl && tpl) :
         use_count_{ 1 }, // fiber instance or scheduler owner
         flags_{ flag_worker_context },
-#if defined(BOOST_NO_CXX14_GENERIC_LAMBDAS)
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+# if defined(BOOST_NO_CXX14_GENERIC_LAMBDAS)
+        ctx_{ std::allocator_arg, palloc, salloc,
+              detail::wrap(
+                  [this]( typename std::decay< Fn >::type & fn, typename std::decay< Tpl >::type & tpl,
+                          boost::context::captured_context ctx, void * vp) mutable {
+                        return run_( std::move( ctx), std::move( fn), std::move( tpl), static_cast< data_t * >( vp) );
+                  },
+                  std::forward< Fn >( fn),
+                  std::forward< Tpl >( tpl) )
+              }
+# else
+        ctx_{ std::allocator_arg, palloc, salloc,
+              [this,fn=detail::decay_copy( std::forward< Fn >( fn) ),tpl=std::forward< Tpl >( tpl)]
+               (boost::context::captured_context ctx, void * vp) mutable {
+                    return run_( std::move( ctx), std::move( fn), std::move( tpl), static_cast< data_t * >( vp) );
+              }}
+# endif
+#else
+# if defined(BOOST_NO_CXX14_GENERIC_LAMBDAS)
         ctx_{ std::allocator_arg, palloc, salloc,
               detail::wrap(
                   [this]( typename std::decay< Fn >::type & fn, typename std::decay< Tpl >::type & tpl,
@@ -312,13 +395,15 @@ public:
                   },
                   std::forward< Fn >( fn),
                   std::forward< Tpl >( tpl),
-                  boost::context::execution_context::current())}
-#else
+                  boost::context::execution_context::current() )
+              }
+# else
         ctx_{ std::allocator_arg, palloc, salloc,
               [this,fn=detail::decay_copy( std::forward< Fn >( fn) ),tpl=std::forward< Tpl >( tpl),
                ctx=boost::context::execution_context::current()] (void * vp) mutable noexcept {
                     run_( std::move( fn), std::move( tpl), static_cast< data_t * >( vp) );
               }}
+# endif
 #endif
     {}
 
@@ -327,13 +412,27 @@ public:
 
     virtual ~context();
 
+    void deallocate() noexcept {
+        destroy_( this);
+    }
+
     scheduler * get_scheduler() const noexcept;
 
     id get_id() const noexcept;
 
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    void resume();
+    void resume( detail::spinlock_lock &);
+    void resume( context *);
+
+    void terminate();
+#else
     void resume() noexcept;
     void resume( detail::spinlock_lock &) noexcept;
     void resume( context *) noexcept;
+
+    void terminate() noexcept;
+#endif
 
     void suspend() noexcept;
     void suspend( detail::spinlock_lock &) noexcept;
@@ -341,8 +440,6 @@ public:
     void join();
 
     void yield() noexcept;
-
-    void terminate() noexcept;
 
     bool wait_until( std::chrono::steady_clock::time_point const&) noexcept;
     bool wait_until( std::chrono::steady_clock::time_point const&,
@@ -462,7 +559,7 @@ public:
     friend void intrusive_ptr_release( context * ctx) noexcept {
         BOOST_ASSERT( nullptr != ctx);
         if ( 0 == --ctx->use_count_) {
-            ctx->~context();
+            ctx->deallocate();
         }
     }
 };
@@ -480,7 +577,7 @@ struct context_initializer {
 template< typename StackAlloc, typename Fn, typename ... Args >
 static intrusive_ptr< context > make_worker_context( StackAlloc salloc, Fn && fn, Args && ... args) {
     boost::context::stack_context sctx = salloc.allocate();
-#if defined(BOOST_NO_CXX14_CONSTEXPR) || defined(BOOST_NO_CXX11_STD_ALIGN)
+#if defined(BOOST_NO_CXX11_CONSTEXPR) || defined(BOOST_NO_CXX11_STD_ALIGN)
     // reserve space for control structure
     const std::size_t size = sctx.size - sizeof( context);
     void * sp = static_cast< char * >( sctx.sp) - sizeof( context);

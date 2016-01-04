@@ -19,25 +19,14 @@ void fn( std::string const& str, int n)
 	}
 }
 
-void foo() {
+int main()
+{
     try
     {
         boost::fibers::fiber f1( fn, "abc", 5);
         std::cerr << "f1 : " << f1.get_id() << std::endl;
 
         f1.join();
-    }
-	catch ( std::exception const& e)
-	{ std::cerr << "exception: " << e.what() << std::endl; }
-	catch (...)
-	{ std::cerr << "unhandled exception" << std::endl; }
-}
-
-int main()
-{
-    try
-    {
-        foo();
         std::cout << "done." << std::endl;
 
         return EXIT_SUCCESS;

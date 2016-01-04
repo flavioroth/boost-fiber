@@ -23,7 +23,11 @@ namespace boost {
 namespace fibers {
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::resume_( context * active_ctx, context * ctx) {
+#else
 scheduler::resume_( context * active_ctx, context * ctx) noexcept {
+#endif
     BOOST_ASSERT( nullptr != active_ctx);
     BOOST_ASSERT( nullptr != ctx);
     //BOOST_ASSERT( main_ctx_ == active_ctx || dispatcher_ctx_.get() == active_ctx || active_ctx->worker_is_linked() );
@@ -37,7 +41,11 @@ scheduler::resume_( context * active_ctx, context * ctx) noexcept {
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::resume_( context * active_ctx, context * ctx, detail::spinlock_lock & lk) {
+#else
 scheduler::resume_( context * active_ctx, context * ctx, detail::spinlock_lock & lk) noexcept {
+#endif
     BOOST_ASSERT( nullptr != active_ctx);
     BOOST_ASSERT( nullptr != ctx);
     //BOOST_ASSERT( main_ctx_ == active_ctx || dispatcher_ctx_.get() == active_ctx || active_ctx->worker_is_linked() );
@@ -51,7 +59,11 @@ scheduler::resume_( context * active_ctx, context * ctx, detail::spinlock_lock &
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::resume_( context * active_ctx, context * ctx, context * ready_ctx) {
+#else
 scheduler::resume_( context * active_ctx, context * ctx, context * ready_ctx) noexcept {
+#endif
     BOOST_ASSERT( nullptr != active_ctx);
     BOOST_ASSERT( nullptr != ctx);
     BOOST_ASSERT( ready_ctx == active_ctx);
@@ -169,7 +181,11 @@ scheduler::~scheduler() {
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::dispatch() {
+#else
 scheduler::dispatch() noexcept {
+#endif
     BOOST_ASSERT( context::active() == dispatcher_ctx_);
     while ( ! shutdown_) {
         // release termianted context'
@@ -277,7 +293,11 @@ scheduler::set_remote_ready( context * ctx) noexcept {
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::set_terminated( context * active_ctx) {
+#else
 scheduler::set_terminated( context * active_ctx) noexcept {
+#endif
     BOOST_ASSERT( nullptr != active_ctx);
     BOOST_ASSERT( context::active() == active_ctx);
     BOOST_ASSERT( ! active_ctx->is_main_context() );
@@ -296,7 +316,11 @@ scheduler::set_terminated( context * active_ctx) noexcept {
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::yield( context * active_ctx) {
+#else
 scheduler::yield( context * active_ctx) noexcept {
+#endif
     BOOST_ASSERT( nullptr != active_ctx);
     //BOOST_ASSERT( main_ctx_ == active_ctx || dispatcher_ctx_.get() == active_ctx || active_ctx->worker_is_linked() );
     BOOST_ASSERT( ! active_ctx->is_terminated() );
@@ -315,8 +339,13 @@ scheduler::yield( context * active_ctx) noexcept {
 }
 
 bool
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::wait_until( context * active_ctx,
+                       std::chrono::steady_clock::time_point const& sleep_tp) {
+#else
 scheduler::wait_until( context * active_ctx,
                        std::chrono::steady_clock::time_point const& sleep_tp) noexcept {
+#endif
     BOOST_ASSERT( nullptr != active_ctx);
     //BOOST_ASSERT( main_ctx_ == active_ctx || dispatcher_ctx_.get() == active_ctx || active_ctx->worker_is_linked() );
     BOOST_ASSERT( ! active_ctx->is_terminated() );
@@ -344,9 +373,15 @@ scheduler::wait_until( context * active_ctx,
 }
 
 bool
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::wait_until( context * active_ctx,
+                       std::chrono::steady_clock::time_point const& sleep_tp,
+                       detail::spinlock_lock & lk) {
+#else
 scheduler::wait_until( context * active_ctx,
                        std::chrono::steady_clock::time_point const& sleep_tp,
                        detail::spinlock_lock & lk) noexcept {
+#endif
     BOOST_ASSERT( nullptr != active_ctx);
     //BOOST_ASSERT( main_ctx_ == active_ctx || dispatcher_ctx_.get() == active_ctx || active_ctx->worker_is_linked() );
     BOOST_ASSERT( ! active_ctx->is_terminated() );
@@ -374,7 +409,11 @@ scheduler::wait_until( context * active_ctx,
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::suspend( context * active_ctx) {
+#else
 scheduler::suspend( context * active_ctx) noexcept {
+#endif
     BOOST_ASSERT( nullptr != active_ctx);
     //BOOST_ASSERT( main_ctx_ == active_ctx || dispatcher_ctx_.get() == active_ctx || active_ctx->worker_is_linked() );
     // resume another context
@@ -382,8 +421,13 @@ scheduler::suspend( context * active_ctx) noexcept {
 }
 
 void
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+scheduler::suspend( context * active_ctx,
+                    detail::spinlock_lock & lk) {
+#else
 scheduler::suspend( context * active_ctx,
                     detail::spinlock_lock & lk) noexcept {
+#endif
     BOOST_ASSERT( nullptr != active_ctx);
     //BOOST_ASSERT( main_ctx_ == active_ctx || dispatcher_ctx_.get() == active_ctx || active_ctx->worker_is_linked() );
     // resume another context

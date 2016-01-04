@@ -83,9 +83,15 @@ private:
     detail::spinlock                    remote_ready_splk_{};
     detail::spinlock                    worker_splk_{};
 
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    void resume_( context *, context *);
+    void resume_( context *, context *, detail::spinlock_lock &);
+    void resume_( context *, context *, context *);
+#else
     void resume_( context *, context *) noexcept;
     void resume_( context *, context *, detail::spinlock_lock &) noexcept;
     void resume_( context *, context *, context *) noexcept;
+#endif
 
     context * get_next_() noexcept;
 
@@ -103,11 +109,24 @@ public:
 
     virtual ~scheduler();
 
+#if ! defined(BOOST_USE_EXECUTION_CONTEXT)
+    void dispatch();
+
+    void set_terminated( context *);
+
+    void yield( context *);
+
+    bool wait_until( context *,
+                     std::chrono::steady_clock::time_point const&);
+    bool wait_until( context *,
+                     std::chrono::steady_clock::time_point const&,
+                     detail::spinlock_lock &);
+
+    void suspend( context *);
+    void suspend( context *,
+                  detail::spinlock_lock &);
+#else
     void dispatch() noexcept;
-
-    void set_ready( context *) noexcept;
-
-    void set_remote_ready( context *) noexcept;
 
     void set_terminated( context *) noexcept;
 
@@ -122,6 +141,11 @@ public:
     void suspend( context *) noexcept;
     void suspend( context *,
                   detail::spinlock_lock &) noexcept;
+#endif
+
+    void set_ready( context *) noexcept;
+
+    void set_remote_ready( context *) noexcept;
 
     bool has_ready_fibers() const noexcept;
 
